@@ -4,35 +4,35 @@ General instructions and context for Claude Code sessions working on this codeba
 
 ## Codebase Context
 
-Python monorepo with machine learning and data pipeline infrastructure. Multiple packages following modern Python patterns with async/await, strong typing, and clean architecture.
+High-performance JSON parsing and encoding library with Zig extensions. Pure Python implementation with optional Zig acceleration, following modern Python patterns with strong typing and clean architecture.
 
 ## Architecture & Testing
 
-**Core Principle:** Each abstraction level solves exactly one type of problem. Domain models know business rules, repositories know data access, services know workflows, APIs know HTTP concerns.
+**Core Principle:** Each abstraction level solves exactly one type of problem. Parsers know tokenization, decoders know JSON semantics, encoders know serialization, extensions know performance optimization.
 
 **Layer Separation:**
-- Protocol interfaces: Define clear contracts for dependency injection
-- Immutable models: `@dataclass(frozen=True)` as default for data structures
-- Repository pattern: Database access behind typed interfaces
-- Service layer: Business logic coordination, pure functions where possible
-- Domain models: Immutable entities with no external dependencies
+- Protocol interfaces: Define clear contracts for parsing and encoding components
+- Immutable models: `@dataclass(frozen=True)` for JSON node types and configuration
+- Parser layer: Tokenization and syntactic analysis behind typed interfaces
+- Decoder/Encoder layer: JSON semantic processing, pure functions where possible
+- Extension layer: Zig acceleration modules with no Python dependencies
 
 **Testing Patterns:**
-- Mock external dependencies (databases, APIs), not internal logic
-- Descriptive test names: `test_user_assignment_consistency_across_calls`
+- Standards compliance: All CPython JSON test cases must pass
+- Descriptive test names: `test_unicode_escape_sequence_parsing_accuracy`
 - Test isolation: Each test independent, clear setup/teardown
-- Fixture organization: Use pytest fixtures for complex setup, factories for data generation
-- Specific assertions: Assert exact expected values, not just truthiness
+- Fixture organization: Use pytest fixtures for JSON test data, factories for edge cases
+- Specific assertions: Assert exact parsed values and error positions, not just truthiness
 
 **Dependency Management:**
-- Constructor injection: Pass dependencies to constructors, not global imports
-- Type-safe boundaries: Strong typing between all layers
-- Context managers: `with Resource() as client:` for resource management
+- Constructor injection: Pass parsing options to constructors, not global state
+- Type-safe boundaries: Strong typing between parsing layers and language boundaries
+- Resource management: Proper cleanup of Zig-allocated memory and file handles
 
 ## Type System
 
 - Comprehensive type hints on all parameters, returns, class attributes
-- Type aliases for domain concepts: `UserId = str`, `type NodeId = str`
+- Type aliases for domain concepts: `JsonValue = str | int | float | bool | None | dict | list`, `type Position = int`
 - Protocol classes for interfaces over abstract base classes
 - Modern union syntax: `str | None` over `Optional[str]`
 - Enums over string literals for constants
@@ -61,9 +61,9 @@ Python monorepo with machine learning and data pipeline infrastructure. Multiple
 - Lead with core insight immediately, build complexity gradually
 
 **Error Communication:**
-- Error messages as user guidance: `"User features not found: {user_id}"`
-- Exception chaining: `raise ValueError("Context") from e`
-- Include relevant context in error messages
+- Error messages as user guidance: `"Invalid JSON at position 42: expected ',' or '}' after object key"`
+- Exception chaining: `raise JSONDecodeError("Parse error") from e`
+- Include relevant context: position, line/column numbers, surrounding text
 
 ## Formatting
 
@@ -94,9 +94,10 @@ Python monorepo with machine learning and data pipeline infrastructure. Multiple
 ## Common Patterns
 
 - Dataclass usage: Explicitly import and use `dataclasses.dataclass`
-- Database integration: Use proper async context management
-- SQL generation: Use explicit AS keywords for table aliases, clear column prefixes
+- Memory management: Use proper context managers for Zig memory allocation
+- String processing: Use explicit bounds checking and UTF-8 validation
 - Configuration: Use immutable dataclasses with validation in `__post_init__`
+- Performance: Zig extensions for hot paths, Python for flexibility
 
 ## Development Workflow
 
