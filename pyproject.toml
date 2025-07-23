@@ -5,9 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "jzon"
 version = "0.1.0"
-description = """
-TBD
-"""
+description = "High-performance JSON parsing and encoding library with Zig extensions"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
@@ -20,14 +18,11 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: Implementation :: CPython",
 ]
-dependencies = [
-    "pandas",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [
     "mypy",
-    "pandas-stubs",
     "pytest",
     "ruff",
 ]
@@ -107,4 +102,11 @@ addopts = [
 markers = [
     "slow: marks tests as slow",
     "integration: marks tests as integration tests",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.17.0",
+    "pytest>=8.4.1",
+    "ruff>=0.12.4",
 ]
