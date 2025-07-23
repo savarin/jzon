@@ -24,13 +24,9 @@ echo ""
 # Core architectural milestone tests
 echo "📋 Running milestone test suite..."
 
-echo "• Running placeholder tests..."
-uv run pytest tests/test_placeholder.py -v
-
-echo ""
 echo "• Running core decode functionality tests..."
 
-# All currently passing milestone tests (25 total: 1 placeholder + 24 decode tests)
+# All currently passing milestone tests (24 decode tests)
 # These represent our architectural milestone - state machine implementation
 uv run pytest \
   tests/test_decode.py::test_bytes_input_handling \
@@ -57,7 +53,7 @@ echo "   • ✅ Zero-cost profiling infrastructure with JZON_PROFILE=1"
 echo "   • ✅ object_pairs_hook and object_hook support"
 echo "   • ✅ Precise error handling with line/column tracking"
 echo "   • ✅ Zig-ready lexer and parser (JsonLexer + JsonParser)"
-echo "   • ✅ 25/25 milestone tests passing (100% milestone compatibility)"
+echo "   • ✅ 24/24 milestone tests passing (100% milestone compatibility)"
 echo "   • ✅ Character-level tokenization ready for Zig translation"
 echo ""
 echo "🎉 Production Ready: All critical issues resolved!"

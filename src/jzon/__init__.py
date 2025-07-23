@@ -225,49 +225,62 @@ class JsonLexer:
                 "Unterminated string starting at", self.text, start
             )
 
-    def scan_number(self) -> JsonToken:  # noqa: PLR0912
+    def _scan_integer_part(self, start: Position) -> None:
+        """Scans the integer part of a JSON number."""
+        if not self.peek().isdigit():
+            raise JSONDecodeError("Invalid number", self.text, start)
+
+        if self.peek() == "0":
+            self.advance()
+            if self.peek().isdigit():
+                raise JSONDecodeError(
+                    "Leading zeros not allowed", self.text, start
+                )
+        else:
+            while self.peek().isdigit():
+                self.advance()
+
+    def _scan_decimal_part(self, start: Position) -> None:
+        """Scans the decimal part of a JSON number if present."""
+        if self.peek() == ".":
+            self.advance()
+            if not self.peek().isdigit():
+                raise JSONDecodeError(
+                    "Invalid decimal number", self.text, start
+                )
+            while self.peek().isdigit():
+                self.advance()
+
+    def _scan_exponent_part(self, start: Position) -> None:
+        """Scans the exponent part of a JSON number if present."""
+        if self.peek().lower() == "e":
+            self.advance()
+            if self.peek() in "+-":
+                self.advance()
+            if not self.peek().isdigit():
+                raise JSONDecodeError("Invalid exponent", self.text, start)
+            while self.peek().isdigit():
+                self.advance()
+
+    def scan_number(self) -> JsonToken:
         """Scans a JSON number token."""
         with ProfileContext("scan_number"):
             start = self.pos
+
+            # Check for -Infinity before treating as number
+            if self.text[self.pos : self.pos + 9] == "-Infinity":
+                self.pos += 9
+                return JsonToken(
+                    ParseState.LITERAL, "-Infinity", start, self.pos
+                )
 
             # Handle negative numbers
             if self.peek() == "-":
                 self.advance()
 
-            # Scan digits
-            if not self.peek().isdigit():
-                raise JSONDecodeError("Invalid number", self.text, start)
-
-            # Handle zero or multi-digit numbers
-            if self.peek() == "0":
-                self.advance()
-                if self.peek().isdigit():
-                    raise JSONDecodeError(
-                        "Leading zeros not allowed", self.text, start
-                    )
-            else:
-                while self.peek().isdigit():
-                    self.advance()
-
-            # Handle decimal part
-            if self.peek() == ".":
-                self.advance()
-                if not self.peek().isdigit():
-                    raise JSONDecodeError(
-                        "Invalid decimal number", self.text, start
-                    )
-                while self.peek().isdigit():
-                    self.advance()
-
-            # Handle exponent
-            if self.peek().lower() == "e":
-                self.advance()
-                if self.peek() in "+-":
-                    self.advance()
-                if not self.peek().isdigit():
-                    raise JSONDecodeError("Invalid exponent", self.text, start)
-                while self.peek().isdigit():
-                    self.advance()
+            self._scan_integer_part(start)
+            self._scan_decimal_part(start)
+            self._scan_exponent_part(start)
 
             return JsonToken(
                 ParseState.NUMBER, self.text[start : self.pos], start, self.pos
@@ -287,6 +300,14 @@ class JsonLexer:
             elif self.text[self.pos : self.pos + 4] == "null":
                 self.pos += 4
                 return JsonToken(ParseState.LITERAL, "null", start, self.pos)
+            elif self.text[self.pos : self.pos + 8] == "Infinity":
+                self.pos += 8
+                return JsonToken(
+                    ParseState.LITERAL, "Infinity", start, self.pos
+                )
+            elif self.text[self.pos : self.pos + 3] == "NaN":
+                self.pos += 3
+                return JsonToken(ParseState.LITERAL, "NaN", start, self.pos)
             else:
                 raise JSONDecodeError("Invalid literal", self.text, start)
 
@@ -322,11 +343,11 @@ class JsonLexer:
             return self.scan_number()
 
         # Literal tokens
-        elif char in "tfn":
+        elif char in "tfnIN":
             return self.scan_literal()
 
         else:
-            raise JSONDecodeError("Unexpected character", self.text, self.pos)
+            raise JSONDecodeError("Expecting value", self.text, self.pos)
 
 
 @dataclass(frozen=True)
@@ -399,7 +420,7 @@ class JsonParser:
         """Expects a specific token value and advances."""
         if not self.current_token or self.current_token.value != expected_value:
             raise JSONDecodeError(
-                f"Expected '{expected_value}'",
+                f"Expecting '{expected_value}' delimiter",
                 self.lexer.text,
                 self.current_token.start
                 if self.current_token
@@ -436,6 +457,66 @@ class JsonParser:
                 "Expecting value", self.lexer.text, token.start
             )
 
+    def _parse_object_key(self) -> str:
+        """Parses object key and validates it's a proper string token."""
+        if (
+            not self.current_token
+            or self.current_token.type != ParseState.STRING
+        ):
+            raise JSONDecodeError(
+                "Expecting property name enclosed in double quotes",
+                self.lexer.text,
+                self.current_token.start
+                if self.current_token
+                else self.lexer.pos,
+            )
+
+        key_token = self.current_token
+        self.advance_token()
+        return _parse_string_content(key_token.value, self.config)
+
+    def _handle_object_continuation(self) -> bool:
+        """Handles object continuation logic, returns True if should continue parsing."""
+        if not self.current_token:
+            raise JSONDecodeError(
+                "Expecting ',' delimiter",
+                self.lexer.text,
+                self.lexer.pos,
+            )
+
+        if self.current_token.value == "}":
+            self.advance_token()
+            return False
+        elif self.current_token.value == ",":
+            comma_pos = self.current_token.start
+            self.advance_token()
+            # Check for trailing comma
+            if self.current_token and self.current_token.value == "}":
+                raise JSONDecodeError(
+                    "Illegal trailing comma before end of object",
+                    self.lexer.text,
+                    comma_pos,
+                )
+            return True
+        else:
+            raise JSONDecodeError(
+                "Expecting ',' delimiter",
+                self.lexer.text,
+                self.current_token.start,
+            )
+
+    def _apply_object_hooks(
+        self, pairs: list[tuple[str, JsonValueOrTransformed]]
+    ) -> JsonValueOrTransformed:
+        """Applies object hooks to parsed pairs."""
+        if self.config.object_pairs_hook:
+            return self.config.object_pairs_hook(pairs)
+        else:
+            obj = dict(pairs)
+            if self.config.object_hook:
+                return self.config.object_hook(obj)
+            return obj
+
     def parse_object(self) -> JsonValueOrTransformed:
         """Parses JSON object with state machine."""
         with ProfileContext("parse_object"):
@@ -449,66 +530,15 @@ class JsonParser:
             pairs: list[tuple[str, JsonValueOrTransformed]] = []
 
             while True:
-                # Parse key
-                if (
-                    not self.current_token
-                    or self.current_token.type != ParseState.STRING
-                ):
-                    raise JSONDecodeError(
-                        "Expecting property name enclosed in double quotes",
-                        self.lexer.text,
-                        self.current_token.start
-                        if self.current_token
-                        else self.lexer.pos,
-                    )
-
-                key_token = self.current_token
-                self.advance_token()
-                key = _parse_string_content(key_token.value, self.config)
-
-                # Expect colon
+                key = self._parse_object_key()
                 self.expect_token(":")
-
-                # Parse value
                 value = self.parse_value()
                 pairs.append((key, value))
 
-                # Check for continuation or end
-                if not self.current_token:
-                    raise JSONDecodeError(
-                        "Expecting ',' delimiter",
-                        self.lexer.text,
-                        self.lexer.pos,
-                    )
-
-                if self.current_token.value == "}":
-                    self.advance_token()
+                if not self._handle_object_continuation():
                     break
-                elif self.current_token.value == ",":
-                    self.advance_token()
-                    # Check for trailing comma
-                    if self.current_token and self.current_token.value == "}":
-                        raise JSONDecodeError(
-                            "Illegal trailing comma before end of object",
-                            self.lexer.text,
-                            self.current_token.start - 1,
-                        )
-                else:
-                    raise JSONDecodeError(
-                        "Expecting ',' delimiter",
-                        self.lexer.text,
-                        self.current_token.start,
-                    )
 
-            # Use object_pairs_hook if provided (takes priority)
-            if self.config.object_pairs_hook:
-                return self.config.object_pairs_hook(pairs)
-            else:
-                obj = dict(pairs)
-                # Use object_hook if provided
-                if self.config.object_hook:
-                    return self.config.object_hook(obj)
-                return obj
+            return self._apply_object_hooks(pairs)
 
     def parse_array(self) -> list[JsonValueOrTransformed]:
         """Parses JSON array with state machine."""
@@ -539,13 +569,14 @@ class JsonParser:
                     self.advance_token()
                     break
                 elif self.current_token.value == ",":
+                    comma_pos = self.current_token.start
                     self.advance_token()
                     # Check for trailing comma
                     if self.current_token and self.current_token.value == "]":
                         raise JSONDecodeError(
                             "Illegal trailing comma before end of array",
                             self.lexer.text,
-                            self.current_token.start - 1,
+                            comma_pos,
                         )
                 else:
                     raise JSONDecodeError(
@@ -714,8 +745,15 @@ def _determine_value_type(s: str) -> ParseState:
 
     if stripped in ("null", "true", "false", "Infinity", "-Infinity", "NaN"):
         return ParseState.LITERAL
-    elif stripped.startswith('"') and stripped.endswith('"'):
-        return ParseState.STRING
+    elif stripped.startswith('"'):
+        # For strings, we need to validate proper syntax, not just start/end quotes
+        # Use lexer to validate the string is properly formed
+        lexer = JsonLexer(stripped)
+        token = lexer.scan_string()  # This will raise proper error if malformed
+        if token.end == len(stripped):  # Consumed entire input
+            return ParseState.STRING
+        else:
+            raise JSONDecodeError("Invalid string format", s, 0)
     elif stripped.startswith("{"):
         return ParseState.OBJECT_START
     elif stripped.startswith("["):
@@ -730,50 +768,21 @@ def _parse_value(s: str, config: ParseConfig) -> JsonValueOrTransformed:
     """
     Main parser entry point implementing staged parsing strategy.
 
-    Stage 1: Determine structure and create zero-copy views
-    Stage 2: Parse simple values immediately, defer complex ones
-    Stage 3: Use arena allocation for final materialization
-
-    This matches Newtonsoft's approach while enabling Zig optimization.
+    Uses lexer/parser for proper error positioning and standards compliance.
     """
     with ProfileContext("parse_value", len(s)):
-        stripped = s.strip()
+        # Use lexer/parser for all parsing to ensure proper error positions
+        lexer = JsonLexer(s)
+        parser = JsonParser(lexer, config)
+        parser.advance_token()  # Load first token
 
-        if not stripped:
-            raise JSONDecodeError("Expecting value", s, 0)
+        result = parser.parse_value()
 
-        # Handle empty containers immediately (optimization)
-        if stripped == "{}":
-            return {}
-        elif stripped == "[]":
-            return []
+        # Check for extra data after valid JSON
+        if parser.current_token:
+            raise JSONDecodeError("Extra data", s, parser.current_token.start)
 
-        # Determine value type for lazy materialization
-        value_type = _determine_value_type(stripped)
-
-        # For simple values, parse immediately
-        if value_type in (
-            ParseState.LITERAL,
-            ParseState.STRING,
-            ParseState.NUMBER,
-        ):
-            return _parse_view_content(stripped, value_type, config)
-
-        # For complex structures, use state machine parser
-        else:
-            lexer = JsonLexer(stripped)
-            parser = JsonParser(lexer, config)
-            parser.advance_token()  # Load first token
-
-            result = parser.parse_value()
-
-            # Check for extra data after valid JSON
-            if parser.current_token:
-                raise JSONDecodeError(
-                    "Extra data", stripped, parser.current_token.start
-                )
-
-            return result
+        return result
 
 
 def loads(s: str, **kwargs: Any) -> JsonValueOrTransformed:
