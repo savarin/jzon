@@ -5,7 +5,6 @@ Provides JSON encoding and decoding functionality compatible with the standard
 library json module, with optional Zig acceleration for performance-critical paths.
 """
 
-import dataclasses
 import os
 import time
 from collections.abc import Callable
@@ -151,75 +150,6 @@ class JSONDecodeError(ValueError):
 
         # Initialize ValueError with formatted message
         super().__init__(f"{msg} at line {self.lineno}, column {self.colno}")
-
-
-@dataclass(frozen=True)
-class JsonView:
-    """
-    Zero-copy view into JSON source string.
-
-    Implements lazy materialization - parsing is deferred until value is accessed.
-    This matches Newtonsoft's StringReference pattern and enables Zig arena allocation.
-    """
-
-    source: str
-    start: Position
-    end: Position
-    value_type: ParseState
-    _materialized: JsonValueOrTransformed | None = dataclasses.field(
-        default=None, init=False
-    )
-
-    def get_value(self, config: "ParseConfig") -> JsonValueOrTransformed:
-        """
-        Materializes the parsed value on-demand.
-
-        First access triggers parsing, subsequent accesses return cached value.
-        This enables FastAPI-style lazy evaluation.
-        """
-        if self._materialized is None:
-            with ProfileContext("materialize_value", self.end - self.start):
-                view_str = self.source[self.start : self.end]
-                # Use object.__setattr__ for frozen dataclass
-                object.__setattr__(
-                    self,
-                    "_materialized",
-                    _parse_view_content(view_str, self.value_type, config),
-                )
-        return self._materialized
-
-    @property
-    def raw_content(self) -> str:
-        """Returns the raw string content without parsing."""
-        return self.source[self.start : self.end]
-
-
-@dataclass(frozen=True)
-class ParseResult:
-    """
-    Result of parsing operation with contextual error information.
-
-    Supports both immediate values and lazy views for memory efficiency.
-    Enables Pydantic-style error accumulation for better UX.
-    """
-
-    value: JsonValue | JsonView | None = None
-    errors: list[JSONDecodeError] = dataclasses.field(default_factory=list)
-    final_position: Position = 0
-
-    def is_success(self) -> bool:
-        """Returns True if parsing succeeded without errors."""
-        return not self.errors and self.value is not None
-
-    def get_materialized_value(
-        self, config: "ParseConfig"
-    ) -> JsonValueOrTransformed:
-        """
-        Returns the final parsed value, materializing lazy views if needed.
-        """
-        if isinstance(self.value, JsonView):
-            return self.value.get_value(config)
-        return self.value
 
 
 @dataclass(frozen=True)
@@ -631,10 +561,10 @@ def _parse_view_content(
     content: str, value_type: ParseState, config: ParseConfig
 ) -> JsonValueOrTransformed:
     """
-    Parses content from a JsonView based on its determined type.
+    Parses simple JSON values based on their determined type.
 
-    This function handles the actual parsing after structure analysis is complete.
-    Used for lazy materialization of JsonView objects.
+    This function handles parsing of literals, strings, numbers, and complex
+    structures after type analysis is complete.
     """
     with ProfileContext("parse_view_content", len(content)):
         if value_type == ParseState.LITERAL:
@@ -839,9 +769,7 @@ __all__ = [
     "JsonLexer",
     "JsonParser",
     "JsonToken",
-    "JsonView",
     "ParseConfig",
-    "ParseResult",
     "ParseState",
     "clear_hot_path_stats",
     "dump",
