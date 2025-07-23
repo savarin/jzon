@@ -52,7 +52,7 @@ Zig's strengths align perfectly with our parsing architecture:
 
 ## Key Features
 
-- **State Machine Parser**: Proper recursive descent parsing with minimal `eval()` fallback (to be removed)
+- **State Machine Parser**: Proper recursive descent parsing with no eval() usage
 - **Comprehensive Hooks**: `object_pairs_hook`, `parse_float`, `parse_int`, `parse_constant`
 - **Precise Error Reporting**: Line/column numbers and character positions
 - **Zero-Cost Profiling**: Toggle with `JZON_PROFILE=1` for performance insights
@@ -88,6 +88,7 @@ result = jzon.loads(
 import os
 os.environ['JZON_PROFILE'] = '1'
 
+complex_json = '{"users": [{"name": "Alice", "age": 30}], "total": 1}'
 data = jzon.loads(complex_json)
 stats = jzon.get_hot_path_stats()
 
@@ -95,16 +96,16 @@ for func, stat in stats.items():
     print(f"{func}: {stat.call_count} calls, {stat.total_time_ns}ns")
 ```
 
-## Critical Issues for Next Session
+## Current Status & Remaining Issues
 
-**⚠️ IMPORTANT**: Before using jzon in production, please review the critical issues identified in `/logs/20250122-1939-state-machine-architecture-milestone.md` under "Critical Issues Identified for Next Session". Key items include:
+**✅ Recently Fixed**: 
+- Security risk: eval() fallback completely removed
+- Dependencies: unused pandas dependency removed
+- Project metadata: proper description added
 
-1. **Security Risk**: eval() fallback still exists and must be removed
-2. **JSON Compliance**: String escape sequence handling incomplete
-3. **Dependencies**: Remove unused pandas dependency
-4. **Architecture**: JsonView integration decision needed
+**⚠️ Known Limitations**: String escape sequence handling incomplete (`\"`, `\\`, `\n`, etc.) - basic JSON compliance issue that needs addressing for production use.
 
-See the log file for complete analysis and recommended action plan.
+For complete development history, see `/logs/20250122-1939-state-machine-architecture-milestone.md`.
 
 ## Changelog
 
