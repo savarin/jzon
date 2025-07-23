@@ -609,14 +609,71 @@ def _parse_literal(content: str, config: ParseConfig) -> JsonValueOrTransformed:
             raise JSONDecodeError("Invalid literal", content, 0)
 
 
+def _process_escape_sequence(
+    inner: str, i: int, content: str
+) -> tuple[str, int]:
+    """Process a single escape sequence and return the character and new position."""
+    next_char = inner[i + 1]
+
+    # Basic escape sequences
+    escape_map = {
+        '"': '"',
+        "\\": "\\",
+        "/": "/",
+        "b": "\b",
+        "f": "\f",
+        "n": "\n",
+        "r": "\r",
+        "t": "\t",
+    }
+
+    if next_char in escape_map:
+        return escape_map[next_char], i + 2
+    elif next_char == "u":
+        # Unicode escape sequence \uXXXX
+        if i + 6 <= len(inner):
+            hex_digits = inner[i + 2 : i + 6]
+            try:
+                code_point = int(hex_digits, 16)
+                return chr(code_point), i + 6
+            except ValueError as e:
+                raise JSONDecodeError(
+                    f"Invalid unicode escape sequence: \\u{hex_digits}",
+                    content,
+                    i,
+                ) from e
+        else:
+            raise JSONDecodeError(
+                "Incomplete unicode escape sequence", content, i
+            )
+    else:
+        raise JSONDecodeError(
+            f"Invalid escape sequence: \\{next_char}", content, i
+        )
+
+
 def _parse_string_content(content: str, _config: ParseConfig) -> str:
     """Parses JSON string content, handling escape sequences."""
     with ProfileContext("parse_string", len(content)):
         if not (content.startswith('"') and content.endswith('"')):
             raise JSONDecodeError("Invalid string format", content, 0)
-        # Basic string parsing - remove quotes
-        # TODO: Add proper escape sequence handling
-        return content[1:-1]
+
+        # Remove surrounding quotes
+        inner = content[1:-1]
+
+        # Process escape sequences
+        result = []
+        i = 0
+        while i < len(inner):
+            if inner[i] == "\\" and i + 1 < len(inner):
+                char, new_i = _process_escape_sequence(inner, i, content)
+                result.append(char)
+                i = new_i
+            else:
+                result.append(inner[i])
+                i += 1
+
+        return "".join(result)
 
 
 def _parse_number_content(
