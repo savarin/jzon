@@ -644,11 +644,20 @@ def _parse_view_content(
         elif value_type == ParseState.NUMBER:
             return _parse_number_content(content, config)
         else:
-            # Fallback to eval for complex structures (temporary)
-            try:
-                return eval(content)
-            except Exception as e:
-                raise JSONDecodeError("Invalid JSON content", content, 0) from e
+            # Handle complex structures (objects and arrays) using JsonParser
+            lexer = JsonLexer(content)
+            parser = JsonParser(lexer, config)
+            parser.advance_token()  # Load first token
+
+            result = parser.parse_value()
+
+            # Check for extra data after valid JSON
+            if parser.current_token:
+                raise JSONDecodeError(
+                    "Extra data", content, parser.current_token.start
+                )
+
+            return result
 
 
 def _parse_literal(content: str, config: ParseConfig) -> JsonValueOrTransformed:
