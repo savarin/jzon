@@ -107,6 +107,9 @@ markers = [
 [dependency-groups]
 dev = [
     "mypy>=1.17.0",
+    "orjson>=3.11.0",
     "pytest>=8.4.1",
+    "pytest-benchmark>=5.1.0",
     "ruff>=0.12.4",
+    "ujson>=5.10.0",
 ]
