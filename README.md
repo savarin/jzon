@@ -96,17 +96,6 @@ for func, stat in stats.items():
     print(f"{func}: {stat.call_count} calls, {stat.total_time_ns}ns")
 ```
 
-## Current Status & Remaining Issues
-
-**✅ Recently Fixed**: 
-- Security risk: eval() fallback completely removed
-- Dependencies: unused pandas dependency removed
-- Project metadata: proper description added
-
-**⚠️ Known Limitations**: String escape sequence handling incomplete (`\"`, `\\`, `\n`, etc.) - basic JSON compliance issue that needs addressing for production use.
-
-For complete development history, see `/logs/20250122-1939-state-machine-architecture-milestone.md`.
-
 ## Changelog
 
 ### v0.1.0 - 2025-01-22 (commit: 0ea9862)
