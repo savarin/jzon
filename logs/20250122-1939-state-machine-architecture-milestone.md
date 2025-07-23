@@ -365,7 +365,7 @@ python -m pytest [milestone tests] -v
 
 ### Completed Milestones ✅
 
-1. **State Machine Architecture**: Complete recursive descent parser, no eval() usage
+1. **State Machine Architecture**: Complete recursive descent parser with minimal eval() fallback (identified for removal)
 2. **Hook System**: Full object_pairs_hook, object_hook, parse_* hook support  
 3. **Error Handling**: Precise line/column tracking with detailed error messages
 4. **Profiling Infrastructure**: Zero-cost JZON_PROFILE=1 toggle system
@@ -376,7 +376,7 @@ python -m pytest [milestone tests] -v
 ### Performance Characteristics
 
 **Current Python Implementation**:
-- Zero `eval()` usage for security
+- Minimal `eval()` usage (fallback identified for removal)
 - 25/25 milestone tests passing (100% milestone compatibility) 
 - Configurable profiling for optimization insights
 - Memory-efficient lazy views (JsonView pattern)
@@ -548,10 +548,10 @@ python -m pytest [milestone tests] -v
 
 ## Conclusion and Current Standing
 
-This session successfully completed the foundational architecture milestone for jzon, establishing it as a production-ready JSON parsing library with unique characteristics:
+This session successfully completed the foundational architecture milestone for jzon, establishing it as a JSON parsing library with unique characteristics (critical issues identified for production readiness):
 
 **Key Achievements**:
-- Complete state machine implementation replacing unsafe eval() usage
+- Complete state machine implementation with minimal eval() fallback (to be removed)
 - Comprehensive type safety with MyPy strict compliance  
 - Zero-cost profiling infrastructure for performance optimization
 - Extensive hook system for parsing customization

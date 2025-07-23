@@ -38,8 +38,9 @@ def test_dump_skipkeys() -> None:
 
     s = jzon.dumps(v, skipkeys=True)
     o = jzon.loads(s)
-    assert "valid_key" in o  # type: ignore[operator]
-    assert b"invalid_key" not in o  # type: ignore[operator]
+    assert isinstance(o, dict)
+    assert "valid_key" in o
+    assert b"invalid_key" not in o
 
 
 def test_dump_skipkeys_indent_empty() -> None:

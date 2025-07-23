@@ -10,7 +10,7 @@ YYYYMMDD-HHMM-brief-milestone-summary.md
 ```
 
 **Examples:**
-- `20250122-1900-state-machine-architecture-milestone.md`
+- `20250122-1939-state-machine-architecture-milestone.md`
 - `20250123-1400-zig-integration-planning-session.md`
 - `20250124-1000-json-spec-compliance-completion.md`
 
@@ -27,7 +27,7 @@ Each log file should contain a comprehensive record of the development session, 
 ### 1. Session Header
 ```markdown
 # jzon Development Log - [Milestone Name]
-**Session**: YYYY-MM-DD HH:MM
+**Session**: YYYY-MM-DD HH:MM (Pacific Time)
 **Milestone**: Brief description of main achievement
 ```
 
@@ -84,6 +84,24 @@ Capture insights and strategic positioning:
 - **Strategic advantages** achieved through architectural decisions
 - **Development velocity patterns** that proved effective
 - **Quality assurance practices** that maintained standards
+
+### 10. Critical Issues Identified for Next Session
+Document problems found during final code review to ensure efficient handoff:
+- **Comprehensive code review** of all files (excluding /reference)
+- **Issue categorization** by priority (Critical/Important/Nice to Have)
+- **Specific file locations** and line numbers for each issue
+- **Security and compliance problems** that must be addressed
+- **Architectural inconsistencies** and technical debt
+- **Recommended action plan** with time estimates for next session
+- **Documentation updates** to warn users about current limitations
+
+**Critical Issues Section Requirements:**
+- Conduct thorough code review at session end using search tools
+- Look for security risks (eval, unsafe patterns), incomplete implementations (TODOs), unused dependencies
+- Provide exact file paths and line numbers for all issues
+- Create prioritized action plan with estimated time requirements
+- Update README.md and ARCHITECTURE.md with warnings about critical issues
+- Ensure next session can start immediately with clear objectives
 
 ## Purpose and Usage
 

@@ -21,7 +21,7 @@ def test_decimal_parsing() -> None:
     """
     rval = jzon.loads("1.1", parse_float=decimal.Decimal)
     assert isinstance(rval, decimal.Decimal)
-    assert rval == decimal.Decimal("1.1")  # type: ignore[unreachable]
+    assert rval == decimal.Decimal("1.1")
 
 
 def test_float_parsing() -> None:
@@ -152,8 +152,11 @@ def test_keys_reuse() -> None:
     s = '[{"a_key": 1, "b_\xe9": 2}, {"a_key": 3, "b_\xe9": 4}]'
     rval = jzon.loads(s)
     # Extract keys from dictionaries for comparison
-    dict0 = rval[0]  # type: ignore[index]
-    dict1 = rval[1]  # type: ignore[index]
+    assert isinstance(rval, list)
+    dict0 = rval[0]
+    dict1 = rval[1]
+    assert isinstance(dict0, dict)
+    assert isinstance(dict1, dict)
     (a, b), (c, d) = sorted(dict0), sorted(dict1)
 
     # Keys should be reused (same string objects)
