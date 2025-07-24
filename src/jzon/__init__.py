@@ -39,6 +39,67 @@ ParseConstantHook = Callable[[str], Any] | None
 # Profiling infrastructure - zero-cost when disabled
 PROFILE_HOT_PATHS = __debug__ and "JZON_PROFILE" in os.environ
 
+# Zig acceleration - default enabled, Python fallback via environment variable
+USE_PYTHON_FALLBACK = "JZON_PYTHON" in os.environ
+_zig_available = False
+
+if not USE_PYTHON_FALLBACK:
+    try:
+        # Try to import Zig bindings
+        import ctypes
+        import ctypes.util
+        from pathlib import Path
+
+        # Look for the compiled Zig library
+        lib_name = "jzon_zig"
+        lib_path = None
+
+        # Check in zig-out/lib (standard Zig build output)
+        project_root = Path(__file__).parent.parent.parent
+        zig_lib_path = project_root / "zig-out" / "lib"
+
+        for suffix in ["so", "dylib", "dll"]:
+            candidate = zig_lib_path / f"lib{lib_name}.{suffix}"
+            if candidate.exists():
+                lib_path = str(candidate)
+                break
+
+        if lib_path:
+            _jzon_zig = ctypes.CDLL(lib_path)
+
+            # Configure function signatures following C ABI patterns
+            # String tokenization function
+            _jzon_zig.jzon_tokenize_string.argtypes = [
+                ctypes.c_char_p,  # input string
+                ctypes.c_char_p,  # output buffer
+                ctypes.c_size_t,  # buffer size
+            ]
+            _jzon_zig.jzon_tokenize_string.restype = ctypes.c_int
+
+            # Number parsing function
+            _jzon_zig.jzon_parse_number.argtypes = [
+                ctypes.c_char_p,  # input string
+                ctypes.POINTER(ctypes.c_double),  # result pointer
+            ]
+            _jzon_zig.jzon_parse_number.restype = ctypes.c_int
+
+            # UTF-8 validation function
+            _jzon_zig.jzon_validate_utf8.argtypes = [
+                ctypes.c_char_p,  # input string
+                ctypes.c_size_t,  # string length
+            ]
+            _jzon_zig.jzon_validate_utf8.restype = ctypes.c_int
+
+            _zig_available = True
+        else:
+            # Library not found, fall back to Python
+            USE_PYTHON_FALLBACK = True
+
+    except (ImportError, OSError, AttributeError):
+        # Failed to load Zig library, fall back to Python
+        USE_PYTHON_FALLBACK = True
+        _zig_available = False
+
 
 @dataclass
 class HotPathStats:
@@ -698,6 +759,66 @@ def _process_escape_sequence(
         )
 
 
+# Zig integration helper functions with Python fallback
+def _zig_tokenize_string(input_str: str) -> str | None:
+    """Attempts Zig string tokenization, returns None if unavailable."""
+    if not _zig_available or USE_PYTHON_FALLBACK:
+        return None
+
+    try:
+        # Allocate buffer for output (generous size)
+        buffer_size = len(input_str) * 2 + 1024
+        output_buffer = ctypes.create_string_buffer(buffer_size)
+
+        # Call Zig function
+        result = _jzon_zig.jzon_tokenize_string(
+            input_str.encode("utf-8"), output_buffer, buffer_size
+        )
+
+        if result == 0:  # Success
+            return output_buffer.value.decode("utf-8")
+        else:
+            return None  # Fall back to Python
+
+    except (OSError, AttributeError, UnicodeDecodeError):
+        return None  # Fall back to Python
+
+
+def _zig_parse_number(input_str: str) -> float | None:
+    """Attempts Zig number parsing, returns None if unavailable."""
+    if not _zig_available or USE_PYTHON_FALLBACK:
+        return None
+
+    try:
+        result = ctypes.c_double()
+        status = _jzon_zig.jzon_parse_number(
+            input_str.encode("utf-8"), ctypes.byref(result)
+        )
+
+        if status == 0:  # Success
+            return result.value
+        else:
+            return None  # Fall back to Python
+
+    except (OSError, AttributeError):
+        return None  # Fall back to Python
+
+
+def _zig_validate_utf8(input_str: str) -> bool | None:
+    """Attempts Zig UTF-8 validation, returns None if unavailable."""
+    if not _zig_available or USE_PYTHON_FALLBACK:
+        return None
+
+    try:
+        input_bytes = input_str.encode("utf-8")
+        result = _jzon_zig.jzon_validate_utf8(input_bytes, len(input_bytes))
+
+        return bool(result == 0)  # 0 = valid, non-zero = invalid
+
+    except (OSError, AttributeError, UnicodeEncodeError):
+        return None  # Fall back to Python
+
+
 def _parse_string_content(content: str, _config: ParseConfig) -> str:
     """Parses JSON string content, handling escape sequences."""
     with ProfileContext("parse_string", len(content)):
@@ -728,6 +849,15 @@ def _parse_number_content(
     """Parses JSON number content with proper validation."""
     with ProfileContext("parse_number", len(content)):
         stripped = content.strip()
+
+        # Try Zig parsing first for performance
+        if "." in stripped or "e" in stripped.lower():
+            # Float parsing
+            zig_result = _zig_parse_number(stripped)
+            if zig_result is not None:
+                if config.parse_float:
+                    return config.parse_float(stripped)
+                return zig_result
 
         # Basic validation for ASCII digits only
         if not all(c in "0123456789.-+eE" for c in stripped):

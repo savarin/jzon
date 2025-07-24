@@ -208,3 +208,7 @@ __marimo__/
 
 # Reference materials (local copies of external codebases)
 reference/
+
+# Zig build artifacts
+.zig-cache/
+zig-out/
