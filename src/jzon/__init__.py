@@ -5,6 +5,7 @@ Provides JSON encoding and decoding functionality compatible with the standard
 library json module, with optional Zig acceleration for performance-critical paths.
 """
 
+import math
 import os
 import time
 from collections.abc import Callable
@@ -410,6 +411,7 @@ class JsonParser:
         self.config = config
         self.current_token: JsonToken | None = None
         self.errors: list[JSONDecodeError] = []
+        self._string_cache: dict[str, str] = {}
 
     def advance_token(self) -> JsonToken | None:
         """Advances to next token and returns it."""
@@ -457,6 +459,19 @@ class JsonParser:
                 "Expecting value", self.lexer.text, token.start
             )
 
+    def _intern_string(self, raw_token: str) -> str:
+        """
+        Intern parsed string to optimize memory usage.
+
+        Caches parsed strings so identical keys reuse the same object.
+        """
+        if raw_token in self._string_cache:
+            return self._string_cache[raw_token]
+
+        parsed = _parse_string_content(raw_token, self.config)
+        self._string_cache[raw_token] = parsed
+        return parsed
+
     def _parse_object_key(self) -> str:
         """Parses object key and validates it's a proper string token."""
         if (
@@ -473,7 +488,7 @@ class JsonParser:
 
         key_token = self.current_token
         self.advance_token()
-        return _parse_string_content(key_token.value, self.config)
+        return self._intern_string(key_token.value)
 
     def _handle_object_continuation(self) -> bool:
         """Handles object continuation logic, returns True if should continue parsing."""
@@ -724,10 +739,16 @@ def _parse_number_content(
                     return config.parse_float(stripped)
                 return float(stripped)
             else:
+                # For integers, handle Python's conversion limit gracefully
+                # Use the system's actual limit rather than hardcoding
+
                 if config.parse_int:
                     return config.parse_int(stripped)
                 return int(stripped)
         except ValueError as e:
+            # Handle Python's int conversion limit gracefully
+            if "Exceeds the limit" in str(e):
+                raise JSONDecodeError("Number too large", content, 0) from e
             raise JSONDecodeError("Invalid number", content, 0) from e
 
 
@@ -771,6 +792,12 @@ def _parse_value(s: str, config: ParseConfig) -> JsonValueOrTransformed:
     Uses lexer/parser for proper error positioning and standards compliance.
     """
     with ProfileContext("parse_value", len(s)):
+        # Check for UTF-8 BOM and reject it per JSON specification
+        if s.startswith("\ufeff"):
+            raise JSONDecodeError(
+                "JSON input should not contain BOM (Byte Order Mark)", s, 0
+            )
+
         # Use lexer/parser for all parsing to ensure proper error positions
         lexer = JsonLexer(s)
         parser = JsonParser(lexer, config)
@@ -798,14 +825,190 @@ def loads(s: str, **kwargs: Any) -> JsonValueOrTransformed:
     return _parse_value(s, config)
 
 
-def dumps(obj: JsonValueLoose, **kwargs: Any) -> str:  # noqa: ARG001
+def _encode_string(s: str, ensure_ascii: bool) -> str:
+    """Encode string with proper escape sequences."""
+    ascii_limit = 127
+    result = ['"']
+    for char in s:
+        if char == '"':
+            result.append('\\"')
+        elif char == "\\":
+            result.append("\\\\")
+        elif char == "\b":
+            result.append("\\b")
+        elif char == "\f":
+            result.append("\\f")
+        elif char == "\n":
+            result.append("\\n")
+        elif char == "\r":
+            result.append("\\r")
+        elif char == "\t":
+            result.append("\\t")
+        elif ensure_ascii and ord(char) > ascii_limit:
+            result.append(f"\\u{ord(char):04x}")
+        else:
+            result.append(char)
+    result.append('"')
+    return "".join(result)
+
+
+def _encode_number(n: int | float) -> str:
+    """Encode numeric values with JSON compliance."""
+    if isinstance(n, float):
+        if math.isnan(n):
+            msg = "Out of range float values are not JSON compliant"
+            raise ValueError(msg)
+        if math.isinf(n):
+            msg = "Out of range float values are not JSON compliant"
+            raise ValueError(msg)
+    return str(n)
+
+
+def _encode_array(
+    arr: list[Any] | tuple[Any, ...], config: EncodeConfig
+) -> str:
+    """Encode array with optional formatting."""
+    if not arr:
+        return "[]"
+
+    encoded_items = [_encode_value(item, config) for item in arr]
+    separator = config.separators[0] if config.separators else ", "
+
+    if config.indent is not None:
+        return _format_array_indented(encoded_items, config, 0)
+    return "[" + separator.join(encoded_items) + "]"
+
+
+def _encode_dict(d: dict[Any, Any], config: EncodeConfig) -> str:
+    """Encode dictionary with key filtering and formatting."""
+    items = []
+
+    for key, value in d.items():
+        if not isinstance(key, str):
+            if config.skipkeys:
+                continue
+            # Only allow basic types to be converted to strings
+            if isinstance(key, bool | int | float):
+                if isinstance(key, bool):
+                    str_key = "true" if key else "false"
+                else:
+                    str_key = str(key)
+            else:
+                msg = f"keys must be strings, not {type(key).__name__}"
+                raise TypeError(msg)
+        else:
+            str_key = key
+
+        encoded_key = _encode_string(str_key, config.ensure_ascii)
+        encoded_value = _encode_value(value, config)
+        items.append((key, encoded_key, encoded_value))
+
+    if not items:
+        return "{}"
+
+    if config.sort_keys:
+        items.sort(key=lambda x: x[0])  # Sort by original key
+
+    # Convert to final format for output
+    formatted_items_list = [
+        (encoded_key, encoded_value) for _, encoded_key, encoded_value in items
+    ]
+
+    if config.indent is not None:
+        return _format_dict_indented(formatted_items_list, config, 0)
+
+    separator = config.separators[1] if config.separators else ": "
+    item_separator = config.separators[0] if config.separators else ", "
+    formatted_items = [
+        f"{key}{separator}{value}" for key, value in formatted_items_list
+    ]
+    return "{" + item_separator.join(formatted_items) + "}"
+
+
+def _format_array_indented(
+    items: list[str], config: EncodeConfig, level: int
+) -> str:
+    """Format array with proper indentation."""
+    if not items:
+        return "[]"
+
+    indent_str = _get_indent_string(config.indent, level)
+    inner_indent = _get_indent_string(config.indent, level + 1)
+
+    lines = ["["]
+    for i, item in enumerate(items):
+        line = f"{inner_indent}{item}"
+        if i < len(items) - 1:
+            line += ","
+        lines.append(line)
+
+    lines.append(f"{indent_str}]")
+    return "\n".join(lines)
+
+
+def _format_dict_indented(
+    items: list[tuple[str, str]], config: EncodeConfig, level: int
+) -> str:
+    """Format dictionary with proper indentation."""
+    if not items:
+        return "{}"
+
+    indent_str = _get_indent_string(config.indent, level)
+    inner_indent = _get_indent_string(config.indent, level + 1)
+    separator = config.separators[1] if config.separators else ":"
+
+    lines = ["{"]
+    for i, (key, value) in enumerate(items):
+        line = f"{inner_indent}{key}{separator} {value}"
+        if i < len(items) - 1:
+            line += ","
+        lines.append(line)
+
+    lines.append(f"{indent_str}}}")
+    return "\n".join(lines)
+
+
+def _get_indent_string(indent: str | int | None, level: int) -> str:
+    """Generate indentation string for given level."""
+    if indent is None:
+        return ""
+    elif isinstance(indent, int):
+        return " " * (indent * level)
+    else:
+        return indent * level
+
+
+def _encode_value(obj: JsonValueLoose, config: EncodeConfig) -> str:  # noqa: PLR0911
+    """Encode any JSON-serializable value."""
+    if obj is None:
+        return "null"
+    elif obj is True:
+        return "true"
+    elif obj is False:
+        return "false"
+    elif isinstance(obj, str):
+        return _encode_string(obj, config.ensure_ascii)
+    elif isinstance(obj, int | float):
+        return _encode_number(obj)
+    elif isinstance(obj, dict):
+        return _encode_dict(obj, config)
+    elif isinstance(obj, list | tuple):
+        return _encode_array(obj, config)
+    elif config.default is not None:
+        return _encode_value(config.default(obj), config)
+    else:
+        msg = f"Object of type {type(obj).__name__} is not JSON serializable"
+        raise TypeError(msg)
+
+
+def dumps(obj: JsonValueLoose, **kwargs: Any) -> str:
     """
     Serializes Python objects to JSON string with configurable formatting.
 
     Uses immutable configuration to ensure consistent encoding behavior.
     """
-    _ = EncodeConfig(**kwargs)  # Validate config but don't use yet
-    raise NotImplementedError("jzon.dumps not yet implemented")
+    config = EncodeConfig(**kwargs)
+    return _encode_value(obj, config)
 
 
 def load(fp: IO[str], **kwargs: Any) -> JsonValueOrTransformed:

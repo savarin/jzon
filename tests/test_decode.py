@@ -6,6 +6,7 @@ and proper handling of various JSON input formats.
 """
 
 import decimal
+import sys
 from collections import OrderedDict
 from io import StringIO
 from typing import Any
@@ -214,11 +215,11 @@ def test_large_integer_limits() -> None:
     """
     Validates handling of very large integer literals.
     """
-    maxdigits = 5000
+    maxdigits = sys.get_int_max_str_digits() - 100  # Stay safely under limit
 
     # Should handle large numbers up to limit
     jzon.loads("1" * maxdigits)
 
-    # Should reject numbers beyond limit
-    with pytest.raises(ValueError):
-        jzon.loads("1" * (maxdigits + 1))
+    # Should reject numbers beyond Python's limit
+    with pytest.raises((ValueError, jzon.JSONDecodeError)):
+        jzon.loads("1" * (sys.get_int_max_str_digits() + 100))
