@@ -7,6 +7,7 @@ library json module, with optional Zig acceleration for performance-critical pat
 
 import math
 import os
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -35,6 +36,18 @@ ObjectPairsHook = (
 ParseFloatHook = Callable[[str], Any] | None
 ParseIntHook = Callable[[str], Any] | None
 ParseConstantHook = Callable[[str], Any] | None
+
+# Escape sequence lookup table - module level for performance
+_ESCAPE_MAP = {
+    '"': '"',
+    "\\": "\\",
+    "/": "/",
+    "b": "\b",
+    "f": "\f",
+    "n": "\n",
+    "r": "\r",
+    "t": "\t",
+}
 
 # Profiling infrastructure - zero-cost when disabled
 PROFILE_HOT_PATHS = __debug__ and "JZON_PROFILE" in os.environ
@@ -255,8 +268,10 @@ class JsonLexer:
     def skip_whitespace(self) -> None:
         """Skips whitespace characters according to JSON spec."""
         with ProfileContext("skip_whitespace"):
-            while self.pos < self.length and self.text[self.pos] in " \t\n\r":
-                self.pos += 1
+            # Fast path: find first non-whitespace character using string methods
+            remaining = self.text[self.pos:]
+            stripped = remaining.lstrip(" \t\n\r")
+            self.pos += len(remaining) - len(stripped)
 
     def scan_string(self) -> JsonToken:
         """Scans a JSON string token including quotes."""
@@ -265,6 +280,23 @@ class JsonLexer:
             if self.advance() != '"':
                 raise JSONDecodeError("Expected string", self.text, start)
 
+            # Fast path: look for closing quote without escapes
+            remaining = self.text[self.pos:]
+            quote_pos = remaining.find('"')
+            if quote_pos != -1:
+                # Check if there are escapes in this string segment
+                string_content = remaining[:quote_pos]
+                if '\\' not in string_content and '\n' not in string_content and '\r' not in string_content:
+                    # Simple string - no escapes
+                    self.pos += quote_pos + 1  # +1 to include the quote
+                    return JsonToken(
+                        ParseState.STRING,
+                        self.text[start : self.pos],
+                        start,
+                        self.pos,
+                    )
+            
+            # Slow path: character-by-character with escape handling
             while self.pos < self.length:
                 char = self.advance()
                 if char == '"':
@@ -299,8 +331,15 @@ class JsonLexer:
                     "Leading zeros not allowed", self.text, start
                 )
         else:
-            while self.peek().isdigit():
-                self.advance()
+            # Fast path: find end of digits using string methods
+            remaining = self.text[self.pos:]
+            digit_count = 0
+            for char in remaining:
+                if char.isdigit():
+                    digit_count += 1
+                else:
+                    break
+            self.pos += digit_count
 
     def _scan_decimal_part(self, start: Position) -> None:
         """Scans the decimal part of a JSON number if present."""
@@ -524,14 +563,16 @@ class JsonParser:
         """
         Intern parsed string to optimize memory usage.
 
-        Caches parsed strings so identical keys reuse the same object.
+        Uses Python's built-in string interning for maximum efficiency.
         """
         if raw_token in self._string_cache:
             return self._string_cache[raw_token]
 
         parsed = _parse_string_content(raw_token, self.config)
-        self._string_cache[raw_token] = parsed
-        return parsed
+        # Use sys.intern for better memory efficiency than custom cache
+        interned = sys.intern(parsed)
+        self._string_cache[raw_token] = interned
+        return interned
 
     def _parse_object_key(self) -> str:
         """Parses object key and validates it's a proper string token."""
@@ -722,20 +763,9 @@ def _process_escape_sequence(
     """Process a single escape sequence and return the character and new position."""
     next_char = inner[i + 1]
 
-    # Basic escape sequences
-    escape_map = {
-        '"': '"',
-        "\\": "\\",
-        "/": "/",
-        "b": "\b",
-        "f": "\f",
-        "n": "\n",
-        "r": "\r",
-        "t": "\t",
-    }
-
-    if next_char in escape_map:
-        return escape_map[next_char], i + 2
+    # Use module-level escape map for O(1) lookup
+    if next_char in _ESCAPE_MAP:
+        return _ESCAPE_MAP[next_char], i + 2
     elif next_char == "u":
         # Unicode escape sequence \uXXXX
         if i + 6 <= len(inner):
@@ -828,7 +858,11 @@ def _parse_string_content(content: str, _config: ParseConfig) -> str:
         # Remove surrounding quotes
         inner = content[1:-1]
 
-        # Process escape sequences
+        # Fast path: if no escapes present, return directly
+        if "\\" not in inner:
+            return inner
+
+        # Slow path: process escape sequences
         result = []
         i = 0
         while i < len(inner):
