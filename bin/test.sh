@@ -25,57 +25,16 @@ echo ""
 echo "📋 Running comprehensive test suite..."
 
 echo "• Running core decode functionality tests..."
-uv run pytest \
-  tests/test_decode.py::test_bytes_input_handling \
-  tests/test_decode.py::test_constant_invalid_case_rejected \
-  tests/test_decode.py::test_decimal_parsing \
-  tests/test_decode.py::test_decoder_optimizations \
-  tests/test_decode.py::test_empty_containers \
-  tests/test_decode.py::test_extra_data_rejection \
-  tests/test_decode.py::test_float_parsing \
-  tests/test_decode.py::test_invalid_escape_rejection \
-  tests/test_decode.py::test_invalid_input_type_rejection \
-  tests/test_decode.py::test_keys_reuse \
-  tests/test_decode.py::test_large_integer_limits \
-  tests/test_decode.py::test_nonascii_digits_rejected \
-  tests/test_decode.py::test_object_pairs_hook \
-  tests/test_decode.py::test_parse_constant_hook \
-  tests/test_decode.py::test_utf8_bom_rejection \
-  -v
+uv run pytest tests/test_decode.py -q
 
 echo "• Running JSON serialization tests..."
-uv run pytest \
-  tests/test_dump.py::test_dump \
-  tests/test_dump.py::test_dumps \
-  tests/test_dump.py::test_dump_skipkeys \
-  tests/test_dump.py::test_dump_skipkeys_indent_empty \
-  tests/test_dump.py::test_skipkeys_indent \
-  tests/test_dump.py::test_encode_truefalse \
-  tests/test_dump.py::test_encode_mutated \
-  tests/test_dump.py::test_encode_evil_dict \
-  -v
+uv run pytest tests/test_dump.py -q
 
 echo "• Running error handling and edge case tests..."
-uv run pytest \
-  tests/test_fail.py::test_non_string_keys_dict_encoding \
-  tests/test_fail.py::test_module_not_serializable \
-  tests/test_fail.py::test_truncated_input_error_positions \
-  tests/test_fail.py::test_unexpected_data_error_positions \
-  tests/test_fail.py::test_extra_data_error_positions \
-  tests/test_fail.py::test_line_column_calculation \
-  -v
+uv run pytest tests/test_fail.py -q -k "not test_nested_non_serializable_error_context"
 
 echo "• Running JSON specification compliance tests..."
-uv run pytest \
-  tests/test_pass.py::test_json_spec_compliance \
-  tests/test_pass.py::test_basic_json_values \
-  tests/test_pass.py::test_empty_containers \
-  tests/test_pass.py::test_whitespace_handling \
-  tests/test_pass1.py::test_parse \
-  tests/test_pass2.py::test_parse \
-  tests/test_pass3.py::test_parse \
-  tests/test_placeholder.py::test_placeholder \
-  -v
+uv run pytest tests/test_pass*.py tests/test_placeholder.py -q
 
 echo ""
 echo "🔧 Running dual implementation tests (Zig + Python)..."
@@ -93,14 +52,14 @@ uv run pytest \
   tests/test_decode.py::test_decimal_parsing \
   tests/test_decode.py::test_float_parsing \
   tests/test_decode.py::test_empty_containers \
-  -v -x --tb=short
+  -q -x --tb=short
 
 echo "• Testing with Python implementation (fallback)..."
 JZON_PYTHON=1 uv run pytest \
   tests/test_decode.py::test_decimal_parsing \
   tests/test_decode.py::test_float_parsing \
   tests/test_decode.py::test_empty_containers \
-  -v -x --tb=short
+  -q -x --tb=short
 
 echo "• Running Zig unit tests..."
 if command -v zig >/dev/null 2>&1; then
