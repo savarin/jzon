@@ -1,8 +1,8 @@
 # jzon
 
-**High-performance JSON parsing and encoding library with Zig extensions**
+**High-performance JSON parsing and encoding library designed for future Zig optimization**
 
-Modern JSON processing that threads the needle between Newtonsoft.Json's extensibility, Zig's performance potential, and Python's ergonomic excellence.
+Modern JSON processing that threads the needle between Newtonsoft.Json's extensibility, future Zig performance potential, and Python's ergonomic excellence.
 
 ## Why Another JSON Library?
 
@@ -57,7 +57,21 @@ Zig's strengths align perfectly with our parsing architecture:
 - **Precise Error Reporting**: Line/column numbers and character positions
 - **Zero-Cost Profiling**: Toggle with `JZON_PROFILE=1` for performance insights
 - **Type Safety**: Full MyPy strict compliance with comprehensive type hints
-- **Zig-Ready Architecture**: Designed for future Zig extension integration
+- **Zig-Ready Architecture**: Designed for future Zig extension integration (pure Python currently)
+
+## Performance Expectations
+
+**Current Status**: Pure Python implementation optimized for clean architecture and correctness.
+
+- **Parsing Speed**: ~50-100x slower than orjson/ujson (competitive with other pure Python parsers)
+- **Memory Usage**: 1.2-2.1x stdlib json memory overhead  
+- **Planned Optimization**: Future Zig integration targeting within 5x of fastest parsers
+
+Use jzon when you prioritize:
+- Superior error diagnostics with nested context
+- Comprehensive hook system for custom processing  
+- Clean, maintainable architecture over raw speed
+- Type safety and development confidence
 
 ## Installation & Usage
 

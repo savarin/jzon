@@ -1001,7 +1001,20 @@ def _encode_array(
     if not arr:
         return "[]"
 
-    encoded_items = [_encode_value(item, config) for item in arr]
+    encoded_items = []
+    for i, item in enumerate(arr):
+        try:
+            encoded_items.append(_encode_value(item, config))
+        except TypeError as e:
+            # Add context information for nested serialization errors
+            context = f"in array at index {i}"
+            if not hasattr(e, "__notes__"):
+                e.add_note(context)
+            else:
+                # Prepend to existing notes for proper nesting order
+                e.__notes__.insert(0, context)
+            raise
+
     separator = config.separators[0] if config.separators else ", "
 
     if config.indent is not None:
@@ -1009,28 +1022,47 @@ def _encode_array(
     return "[" + separator.join(encoded_items) + "]"
 
 
+def _process_dict_key(key: Any, config: EncodeConfig) -> str | None:
+    """Process and validate dictionary key, converting to string if needed."""
+    if isinstance(key, str):
+        return key
+
+    # Handle non-string keys
+    if isinstance(key, bool | int | float):
+        if isinstance(key, bool):
+            return "true" if key else "false"
+        else:
+            return str(key)
+
+    # Non-serializable key
+    if config.skipkeys:
+        return None  # Signal to skip this key-value pair
+
+    msg = f"keys must be strings, not {type(key).__name__}"
+    raise TypeError(msg)
+
+
 def _encode_dict(d: dict[Any, Any], config: EncodeConfig) -> str:
     """Encode dictionary with key filtering and formatting."""
     items = []
 
     for key, value in d.items():
-        if not isinstance(key, str):
-            if config.skipkeys:
-                continue
-            # Only allow basic types to be converted to strings
-            if isinstance(key, bool | int | float):
-                if isinstance(key, bool):
-                    str_key = "true" if key else "false"
-                else:
-                    str_key = str(key)
-            else:
-                msg = f"keys must be strings, not {type(key).__name__}"
-                raise TypeError(msg)
-        else:
-            str_key = key
+        str_key = _process_dict_key(key, config)
+        if str_key is None:  # Skip this key-value pair
+            continue
 
         encoded_key = _encode_string(str_key, config.ensure_ascii)
-        encoded_value = _encode_value(value, config)
+        try:
+            encoded_value = _encode_value(value, config)
+        except TypeError as e:
+            # Add context information for nested serialization errors
+            context = f"in object at key '{str_key}'"
+            if not hasattr(e, "__notes__"):
+                e.add_note(context)
+            else:
+                # Prepend to existing notes for proper nesting order
+                e.__notes__.insert(0, context)
+            raise
         items.append((key, encoded_key, encoded_value))
 
     if not items:

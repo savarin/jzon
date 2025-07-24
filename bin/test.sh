@@ -1,6 +1,13 @@
 #!/bin/bash
 set -e
 
+# Determine test verbosity based on environment
+if [ "${CI:-false}" = "true" ]; then
+    PYTEST_ARGS="-q"
+else
+    PYTEST_ARGS=""  # Use pytest.ini or developer preference
+fi
+
 echo "🎉 Running jzon complete test suite..."
 echo "🔧 Code quality + 🏗️ Architecture milestone validation"
 echo ""
@@ -25,16 +32,16 @@ echo ""
 echo "📋 Running comprehensive test suite..."
 
 echo "• Running core decode functionality tests..."
-uv run pytest tests/test_decode.py -q
+uv run pytest tests/test_decode.py $PYTEST_ARGS
 
 echo "• Running JSON serialization tests..."
-uv run pytest tests/test_dump.py -q
+uv run pytest tests/test_dump.py $PYTEST_ARGS
 
 echo "• Running error handling and edge case tests..."
-uv run pytest tests/test_fail.py -q -k "not test_nested_non_serializable_error_context"
+uv run pytest tests/test_fail.py $PYTEST_ARGS
 
 echo "• Running JSON specification compliance tests..."
-uv run pytest tests/test_pass*.py tests/test_placeholder.py -q
+uv run pytest tests/test_pass*.py tests/test_placeholder.py $PYTEST_ARGS
 
 echo ""
 echo "🔧 Running dual implementation tests (Zig + Python)..."
@@ -52,14 +59,14 @@ uv run pytest \
   tests/test_decode.py::test_decimal_parsing \
   tests/test_decode.py::test_float_parsing \
   tests/test_decode.py::test_empty_containers \
-  -q -x --tb=short
+  $PYTEST_ARGS -x --tb=short
 
 echo "• Testing with Python implementation (fallback)..."
 JZON_PYTHON=1 uv run pytest \
   tests/test_decode.py::test_decimal_parsing \
   tests/test_decode.py::test_float_parsing \
   tests/test_decode.py::test_empty_containers \
-  -q -x --tb=short
+  $PYTEST_ARGS -x --tb=short
 
 echo "• Running Zig unit tests..."
 if command -v zig >/dev/null 2>&1; then
