@@ -2,6 +2,11 @@
 
 High-performance JSON parsing and encoding library with Zig extensions. Pure Python implementation with optional Zig acceleration, following modern Python patterns with strong typing and clean architecture.
 
+## Critical Information
+- Answer thoughtfully: Distinguish between what you know, what you're inventing, and educated guesses. Don't placate.
+- Decision process: When choices arise, first outline trade-offs, then make your recommendation. Don't jump to conclusions.
+- Development phases: Start in 'planning' (discuss approach, function signatures, module structure). Move to 'implementation' (write code). End with 'execution' (write files). When uncertain: assume planning mode.
+
 ## Architecture & Testing
 
 **Core Principle:** Each abstraction level solves exactly one type of problem. Parsers know tokenization, decoders know JSON semantics, encoders know serialization, extensions know performance optimization.
