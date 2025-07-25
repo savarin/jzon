@@ -16,6 +16,15 @@ from typing import IO
 from typing import Any
 from typing import ClassVar
 
+from ._utf8_mapper import UTF8PositionMapper
+
+# Zig error code constants
+ERROR_UNTERMINATED_STRING = -4
+ERROR_INVALID_ESCAPE = -5
+ERROR_INVALID_UNICODE = -6
+ERROR_PARSE_FAILED = -3
+ERROR_INVALID_INPUT = -2
+
 __version__ = "0.1.0"
 
 # Type aliases for domain concepts - recursive definition
@@ -106,6 +115,26 @@ if not USE_PYTHON_FALLBACK:
                     ("end_pos", ctypes.c_uint32),
                 ]
 
+            # Batch token structure for optimized tokenization
+            class ZigBatchToken(ctypes.Structure):
+                _fields_: ClassVar[list[tuple[str, type]]] = [
+                    ("token_type", ctypes.c_int),
+                    ("start_pos", ctypes.c_uint32),
+                    ("end_pos", ctypes.c_uint32),
+                    ("batch_index", ctypes.c_uint16),
+                    ("_padding", ctypes.c_uint16),
+                ]
+
+            # Token batch structure
+            class ZigTokenBatch(ctypes.Structure):
+                _fields_: ClassVar[list[tuple[str, type]]] = [
+                    ("tokens", ZigBatchToken * 64),
+                    ("count", ctypes.c_uint16),
+                    ("error_code", ctypes.c_int32),
+                    ("error_pos", ctypes.c_uint32),
+                    ("_padding", ctypes.c_uint16),
+                ]
+
             # Core tokenizer functions
             _jzon_zig.jzon_next_token.argtypes = [
                 ctypes.c_char_p,  # text
@@ -124,6 +153,25 @@ if not USE_PYTHON_FALLBACK:
                 ctypes.POINTER(ctypes.c_uint32),  # output_length
             ]
             _jzon_zig.jzon_process_string_escapes.restype = ctypes.c_int
+
+            # Batch tokenization function
+            _jzon_zig.jzon_tokenize_batch.argtypes = [
+                ctypes.c_char_p,  # text
+                ctypes.c_uint32,  # text_length
+                ctypes.c_uint32,  # start_pos
+                ctypes.POINTER(ZigTokenBatch),  # batch pointer
+            ]
+            _jzon_zig.jzon_tokenize_batch.restype = ctypes.c_int
+
+            # Accelerated string processing
+            _jzon_zig.jzon_process_json_string.argtypes = [
+                ctypes.c_char_p,  # input
+                ctypes.c_uint32,  # input_length
+                ctypes.c_char_p,  # output
+                ctypes.c_uint32,  # output_capacity
+                ctypes.POINTER(ctypes.c_uint32),  # output_length
+            ]
+            _jzon_zig.jzon_process_json_string.restype = ctypes.c_int
 
             # Legacy functions for backward compatibility
             _jzon_zig.jzon_tokenize_string.argtypes = [
@@ -319,32 +367,47 @@ class JsonLexer:
             # Pre-encode text once for efficiency
             self._text_bytes = text.encode("utf-8")
 
-            # Build efficient byte->char position mapping for UTF-8 strings with non-ASCII
-            ascii_max_codepoint = 127
-            if any(ord(c) > ascii_max_codepoint for c in text):
-                self._build_position_map()
-            else:
-                # ASCII-only optimization: byte positions == char positions
-                self._byte_to_char = None
+            # Use optimized UTF-8 position mapper
+            self._position_mapper = UTF8PositionMapper(text)
 
-    def _build_position_map(self) -> None:
-        """Build mapping from byte positions to character positions for UTF-8."""
-        self._byte_to_char = {}
-        byte_pos = 0
-        for char_pos, char in enumerate(self.text):
-            self._byte_to_char[byte_pos] = char_pos
-            byte_pos += len(char.encode("utf-8"))
-        self._byte_to_char[byte_pos] = len(self.text)  # End position
+            # Track current byte position for batch tokenization
+            self._zig_byte_pos = 0
+
+            # Token batch for reduced FFI overhead
+            self._token_batch: list[JsonToken] = []
+            self._batch_index = 0
 
     def _byte_pos_to_char_pos(self, byte_pos: int) -> int:
         """Convert byte position to character position efficiently."""
-        if self._byte_to_char is None:
-            # ASCII-only: positions are the same
-            return byte_pos
+        return self._position_mapper.byte_to_char(byte_pos)
 
-        # Find the closest byte position we have mapped
-        closest_byte = max(b for b in self._byte_to_char if b <= byte_pos)
-        return self._byte_to_char[closest_byte]
+    def _get_error_message(self, error_code: int) -> str:
+        """Get error message for Zig error code."""
+        if error_code == ERROR_UNTERMINATED_STRING:
+            return "Unterminated string starting at"
+        elif error_code == ERROR_INVALID_ESCAPE:
+            return "Invalid escape sequence"
+        elif error_code == ERROR_INVALID_UNICODE:
+            return "Invalid unicode escape"
+        elif error_code == ERROR_PARSE_FAILED:
+            return "Parse failed"
+        elif error_code == ERROR_INVALID_INPUT:
+            return "Invalid input"
+        else:
+            return "Tokenization error"
+
+    def _adjust_error_position_for_unterminated_string(
+        self, error_code: int, error_pos: int
+    ) -> int:
+        """Adjust error position for unterminated string errors."""
+        if error_code == ERROR_UNTERMINATED_STRING:
+            # For unterminated strings, find the opening quote position
+            search_pos = min(error_pos, len(self.text) - 1)
+            while search_pos > 0 and self.text[search_pos] != '"':
+                search_pos -= 1
+            if search_pos >= 0 and self.text[search_pos] == '"':
+                return search_pos
+        return error_pos
 
     def peek(self) -> str:
         """Returns current character without advancing."""
@@ -518,19 +581,100 @@ class JsonLexer:
                 return self._next_token_python()
 
     def _next_token_zig(self) -> JsonToken | None:
-        """Zig-accelerated tokenization."""
+        """Zig-accelerated tokenization with batch processing."""
         if self.pos >= self.length:
             return None
 
-        # Convert current position to byte offset efficiently
-        if self._byte_to_char is None:
-            # ASCII-only: positions are the same
-            byte_pos = self.pos
-        else:
-            # Find byte position for current char position
-            byte_pos = 0
-            for i in range(self.pos):
-                byte_pos += len(self.text[i].encode("utf-8"))
+        # Check if we need to refill the batch
+        if self._batch_index >= len(self._token_batch):
+            self._refill_token_batch()
+
+        # Return next token from batch
+        if self._batch_index < len(self._token_batch):
+            token = self._token_batch[self._batch_index]
+            self._batch_index += 1
+            # Update lexer position to match token end
+            self.pos = token.end
+            return token
+
+        return None
+
+    def _refill_token_batch(self) -> None:
+        """Refill token batch using Zig batch tokenization."""
+        # Clear current batch
+        self._token_batch.clear()
+        self._batch_index = 0
+
+        # Create batch structure
+        batch = ZigTokenBatch()
+
+        # Call Zig batch tokenizer
+        result = _jzon_zig.jzon_tokenize_batch(
+            self._text_bytes,
+            len(self._text_bytes),
+            self._zig_byte_pos,
+            ctypes.byref(batch),
+        )
+
+        # Handle errors
+        if result != 0:
+            error_char_pos = self._position_mapper.byte_to_char(batch.error_pos)
+            error_char_pos = (
+                self._adjust_error_position_for_unterminated_string(
+                    result, error_char_pos
+                )
+            )
+            msg = self._get_error_message(result)
+            raise JSONDecodeError(msg, self.text, error_char_pos)
+
+        # Process batch tokens
+        for i in range(batch.count):
+            zig_token = batch.tokens[i]
+
+            # Convert byte positions to character positions
+            start_char = self._position_mapper.byte_to_char(zig_token.start_pos)
+            end_char = self._position_mapper.byte_to_char(zig_token.end_pos)
+
+            # Map token type
+            token_type = self._token_type_map.get(
+                zig_token.token_type, ParseState.START
+            )
+
+            # Token type constants for context-dependent tokens
+            object_end_token = 2
+            array_end_token = 4
+
+            # Handle context-dependent tokens
+            if zig_token.token_type == object_end_token:  # OBJECT_END
+                token_type = (
+                    ParseState.OBJECT_START
+                )  # Will be handled by parser context
+            elif zig_token.token_type == array_end_token:  # ARRAY_END
+                token_type = (
+                    ParseState.ARRAY_START
+                )  # Will be handled by parser context
+
+            # Extract token value
+            token_value = self.text[start_char:end_char]
+
+            # Create Python token
+            self._token_batch.append(
+                JsonToken(token_type, token_value, start_char, end_char)
+            )
+
+        # Update Zig byte position for next batch
+        if batch.count > 0:
+            last_token = batch.tokens[batch.count - 1]
+            self._zig_byte_pos = last_token.end_pos
+            # Don't update self.pos here - it will be updated when tokens are consumed
+
+    def _next_token_zig_single(self) -> JsonToken | None:
+        """Single token Zig-accelerated tokenization (legacy path)."""
+        if self.pos >= self.length:
+            return None
+
+        # Convert current position to byte offset
+        byte_pos = self._position_mapper.char_to_byte(self.pos)
 
         # Call Zig tokenizer
         position = ctypes.c_uint32(byte_pos)
@@ -544,16 +688,11 @@ class JsonLexer:
         )
 
         if result != 0:  # Error occurred
-            # Map error codes to exceptions
-            error_messages = {
-                -4: "Unterminated string starting at",
-                -5: "Invalid escape sequence",
-                -6: "Invalid unicode escape",
-                -3: "Parse failed",
-                -2: "Invalid input",
-            }
-            msg = error_messages.get(result, "Tokenization error")
-            raise JSONDecodeError(msg, self.text, self.pos)
+            error_pos = self._adjust_error_position_for_unterminated_string(
+                result, self.pos
+            )
+            msg = self._get_error_message(result)
+            raise JSONDecodeError(msg, self.text, error_pos)
 
         # Convert byte positions back to character positions efficiently
         start_char = self._byte_pos_to_char_pos(zig_token.start_pos)
@@ -1010,11 +1149,47 @@ def _zig_validate_utf8(input_str: str) -> bool | None:
         return None  # Fall back to Python
 
 
+def _zig_process_string(input_str: str) -> str | None:
+    """Attempts Zig string processing with escape sequences, returns None if unavailable."""
+    if not _zig_available or USE_PYTHON_FALLBACK:
+        return None
+
+    try:
+        input_bytes = input_str.encode("utf-8")
+        output_capacity = (
+            len(input_bytes) * 2
+        )  # Worst case for escape expansion
+        output_buffer = ctypes.create_string_buffer(output_capacity)
+        output_length = ctypes.c_uint32()
+
+        result = _jzon_zig.jzon_process_json_string(
+            input_bytes,
+            len(input_bytes),
+            output_buffer,
+            output_capacity,
+            ctypes.byref(output_length),
+        )
+
+        if result == 0:  # Success
+            return output_buffer.raw[: output_length.value].decode("utf-8")
+        else:
+            return None  # Fall back to Python
+
+    except (OSError, AttributeError, UnicodeDecodeError):
+        return None  # Fall back to Python
+
+
 def _parse_string_content(content: str, _config: ParseConfig) -> str:
     """Parses JSON string content, handling escape sequences."""
     with ProfileContext("parse_string", len(content)):
         if not (content.startswith('"') and content.endswith('"')):
             raise JSONDecodeError("Invalid string format", content, 0)
+
+        # Try Zig acceleration first if available
+        if _zig_available:
+            zig_result = _zig_process_string(content)
+            if zig_result is not None:
+                return zig_result
 
         # Remove surrounding quotes
         inner = content[1:-1]
@@ -1024,7 +1199,7 @@ def _parse_string_content(content: str, _config: ParseConfig) -> str:
             return inner
 
         # Slow path: process escape sequences
-        result = []
+        result: list[str] = []
         i = 0
         while i < len(inner):
             if inner[i] == "\\" and i + 1 < len(inner):

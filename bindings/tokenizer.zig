@@ -545,6 +545,105 @@ export fn jzon_process_string_escapes(
     return SUCCESS;
 }
 
+// Batch tokenization structures for optimized FFI
+const BatchToken = extern struct {
+    token_type: TokenType,
+    start_pos: u32,
+    end_pos: u32,
+    batch_index: u16,
+    _padding: u16, // Ensure alignment
+};
+
+const TokenBatch = extern struct {
+    tokens: [64]BatchToken,
+    count: u16,
+    error_code: i32,
+    error_pos: u32,
+    _padding: u16, // Ensure alignment
+};
+
+// Arena allocator for batch tokenization
+const TokenArena = struct {
+    buffer: [8192]u8,
+    used: u32,
+    
+    fn init() TokenArena {
+        return TokenArena{
+            .buffer = undefined,
+            .used = 0,
+        };
+    }
+    
+    fn alloc(self: *TokenArena, size: u32) ?[]u8 {
+        const aligned_size = (size + 7) & ~@as(u32, 7); // 8-byte alignment
+        if (self.used + aligned_size > self.buffer.len) return null;
+        const start = self.used;
+        self.used += aligned_size;
+        return self.buffer[start..start + size];
+    }
+    
+    fn reset(self: *TokenArena) void {
+        self.used = 0;
+    }
+};
+
+// Batch tokenization function for reduced FFI overhead
+export fn jzon_tokenize_batch(
+    text: [*:0]const u8,
+    text_length: u32,
+    start_pos: u32,
+    batch: *TokenBatch,
+) callconv(.C) i32 {
+    // No null checks needed for non-optional pointers in Zig
+    
+    // Initialize batch
+    batch.count = 0;
+    batch.error_code = SUCCESS;
+    batch.error_pos = 0;
+    
+    // Create tokenizer state from position
+    const text_slice = text[0..text_length];
+    var state = TokenizerState.init(text_slice);
+    state.pos = start_pos;
+    
+    // Process tokens in batch
+    var batch_idx: u16 = 0;
+    while (batch_idx < 64 and !state.isAtEnd()) {
+        // Get next token
+        const token_result = state.nextToken();
+        
+        if (token_result) |token| {
+            // Check for EOF
+            if (token.token_type == TokenType.EOF) {
+                break;
+            }
+            
+            // Add to batch
+            batch.tokens[batch_idx] = BatchToken{
+                .token_type = token.token_type,
+                .start_pos = token.start_pos,
+                .end_pos = token.end_pos,
+                .batch_index = batch_idx,
+                ._padding = 0,
+            };
+            
+            batch_idx += 1;
+        } else |err| {
+            // Record error and stop
+            batch.error_code = switch (err) {
+                error.UnterminatedString => ERROR_UNTERMINATED_STRING,
+                error.InvalidEscapeSequence => ERROR_INVALID_ESCAPE,
+                error.InvalidUnicodeEscape => ERROR_INVALID_UNICODE,
+            };
+            batch.error_pos = state.pos;
+            return batch.error_code;
+        }
+    }
+    
+    batch.count = batch_idx;
+    return SUCCESS;
+}
+
 fn hexDigitValue(char: u8) u16 {
     return switch (char) {
         '0'...'9' => char - '0',
@@ -552,6 +651,125 @@ fn hexDigitValue(char: u8) u16 {
         'A'...'F' => char - 'A' + 10,
         else => 0,
     };
+}
+
+// Accelerated JSON string processing with full escape sequence handling
+export fn jzon_process_json_string(
+    input: [*:0]const u8,
+    input_length: u32,
+    output: [*]u8,
+    output_capacity: u32,
+    output_length: *u32,
+) callconv(.C) i32 {
+    // No null checks needed for non-optional pointers in Zig
+    
+    const input_slice = input[0..input_length];
+    
+    // Validate string format (must be quoted)
+    if (input_length < 2 or input_slice[0] != '"' or input_slice[input_length - 1] != '"') {
+        return ERROR_INVALID_INPUT;
+    }
+    
+    // Process content between quotes
+    const content = input_slice[1..input_length - 1];
+    var output_pos: u32 = 0;
+    var i: u32 = 0;
+    
+    while (i < content.len) {
+        if (output_pos >= output_capacity) {
+            return ERROR_BUFFER_TOO_SMALL;
+        }
+        
+        const char = content[i];
+        
+        if (char == '\\' and i + 1 < content.len) {
+            // Handle escape sequences
+            i += 1;
+            const escaped = content[i];
+            
+            switch (escaped) {
+                '"' => {
+                    output[output_pos] = '"';
+                    output_pos += 1;
+                },
+                '\\' => {
+                    output[output_pos] = '\\';
+                    output_pos += 1;
+                },
+                '/' => {
+                    output[output_pos] = '/';
+                    output_pos += 1;
+                },
+                'b' => {
+                    output[output_pos] = '\x08';
+                    output_pos += 1;
+                },
+                'f' => {
+                    output[output_pos] = '\x0C';
+                    output_pos += 1;
+                },
+                'n' => {
+                    output[output_pos] = '\n';
+                    output_pos += 1;
+                },
+                'r' => {
+                    output[output_pos] = '\r';
+                    output_pos += 1;
+                },
+                't' => {
+                    output[output_pos] = '\t';
+                    output_pos += 1;
+                },
+                'u' => {
+                    // Unicode escape sequence
+                    if (i + 4 >= content.len) {
+                        return ERROR_INVALID_UNICODE;
+                    }
+                    
+                    // Parse 4 hex digits
+                    var unicode_value: u21 = 0;
+                    for (1..5) |offset| {
+                        const hex_char = content[i + offset];
+                        if (!std.ascii.isHex(hex_char)) {
+                            return ERROR_INVALID_UNICODE;
+                        }
+                        unicode_value = unicode_value * 16 + hexDigitValue(hex_char);
+                    }
+                    
+                    // Convert to UTF-8
+                    var utf8_buffer: [4]u8 = undefined;
+                    const utf8_len = std.unicode.utf8Encode(@intCast(unicode_value), &utf8_buffer) catch {
+                        return ERROR_INVALID_UNICODE;
+                    };
+                    
+                    // Check buffer capacity
+                    if (output_pos + utf8_len > output_capacity) {
+                        return ERROR_BUFFER_TOO_SMALL;
+                    }
+                    
+                    // Copy UTF-8 bytes
+                    for (0..utf8_len) |j| {
+                        output[output_pos] = utf8_buffer[j];
+                        output_pos += 1;
+                    }
+                    
+                    i += 4; // Skip the 4 hex digits
+                },
+                else => {
+                    return ERROR_INVALID_ESCAPE;
+                },
+            }
+        } else {
+            // Regular character
+            output[output_pos] = char;
+            output_pos += 1;
+        }
+        
+        i += 1;
+    }
+    
+    output_length.* = output_pos;
+    return SUCCESS;
 }
 
 // Legacy functions for backward compatibility
