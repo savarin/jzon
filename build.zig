@@ -8,7 +8,7 @@ pub fn build(b: *std.Build) void {
     // Build shared library for Python bindings
     const lib = b.addSharedLibrary(.{
         .name = "jzon_zig",
-        .root_source_file = b.path("bindings/jzon.zig"),
+        .root_source_file = b.path("bindings/tokenizer.zig"),
         .target = target,
         .optimize = optimize,
         .version = std.SemanticVersion{ .major = 0, .minor = 1, .patch = 0 },
@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
 
     // Create test executable for Zig-only testing
     const tests = b.addTest(.{
-        .root_source_file = b.path("bindings/jzon.zig"),
+        .root_source_file = b.path("bindings/tokenizer.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -45,7 +45,7 @@ pub fn build(b: *std.Build) void {
     // Development build step for quick iteration
     const dev_lib = b.addSharedLibrary(.{
         .name = "jzon_zig",
-        .root_source_file = b.path("bindings/jzon.zig"), 
+        .root_source_file = b.path("bindings/tokenizer.zig"), 
         .target = target,
         .optimize = .Debug,
     });
