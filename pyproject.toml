@@ -84,6 +84,9 @@ warn_no_return = true
 warn_unreachable = true
 strict_equality = true
 extra_checks = true
+exclude = [
+    "experiments/"
+]
 
 [[tool.mypy.overrides]]
 module = "tests.*"
